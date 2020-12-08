@@ -53,11 +53,11 @@ from ansible.module_utils._text import to_native
 import logging
 import traceback
 
-#logging.basicConfig(level=logging.DEBUG, filename='artifactory-module.log', filemode='a', format='%(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.DEBUG, filename='artifactory-module.log', filemode='a', format='%(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('artifactory')
 
-class ArtifactoryUser(object):
-## https://www.jfrog.com/confluence/display/JFROG/Security+Configuration+JSON#SecurityConfigurationJSON-application/vnd.org.jfrog.artifactory.security.User+json
+class ArtifactoryRepo(object):
+## https://www.jfrog.com/confluence/display/JFROG/Repository+Configuration+JSON
   def __init__(self, module):
     self.logger = logging.getLogger('ArtifactoryUser')
     self.logger.debug("init")
@@ -66,12 +66,12 @@ class ArtifactoryUser(object):
     self.api_username = params.get('api_username')
     self.api_password = params.get('api_password')
     self.api_base = params.get('api_base')
-    self.currentuser = None
+    self.currentrepo = None
     self.state = params['state']
-    self.user = module.params.get('user')
+    self.key = module.params.get('key')
 
     #ToDo: improve url building
-    self.link = "{}/api/security/users/{}".format(self.api_base, self.user)
+    self.link = "{}/api/repositories/{}".format(self.api_base, self.key)
     self.logger.debug("init self.link: {}".format(self.link)) 
 
   def exists(self): 
@@ -80,9 +80,9 @@ class ArtifactoryUser(object):
 
   def get(self):
     self.logger.debug("get") 
-    if self.currentuser is not None:
-      self.logger.debug("Using cached user") 
-      return self.currentuser
+    if self.currentrepo is not None:
+      self.logger.debug("Using cached repo") 
+      return self.currentrepo
 
     try:
       resp = open_url(
@@ -93,28 +93,21 @@ class ArtifactoryUser(object):
         )
 
       if resp.status == 200:
-        self.currentuser = json.loads(resp.read())
-        return self.currentuser
+        self.currentrepo = json.loads(resp.read())
+        return self.currentrepo
     except urllib_request.HTTPError as e:
-      ## User Does not exist -- that can be a good thing
-      if e.status == 404:        
-        self.currentuser = None
+      ## Repo returns 400 (User returned 404) Does not exist -- that can be a good thing
+      if e.status == 400:
+        self.currentrepo = None
         return None
 
-      #
       rawResponse = e.read()
-      self.logger.error("Response: {}".format(rawResponse))
+      self.logger.error("Unexpected Get Response: {}".format(rawResponse))
+      self.logger.error("Unexpected Get Response: {}".format(self.link))
       self.module.fail_json(url=self.link, status=e.status, msg=rawResponse) #json.load(rawResponse).errors[0].message
 
     except Exception as e:
-      self.module.fail_json(msg=to_native(e), function="Get User", exception=traceback.format_exc())
-
-#      else:
-#        raise Exception("Get User HTTP Status Errors", self.link) #"Unexpected status getting user from '{}'. - Status {}.".format(link, resp.status)
-        #self.module.fail_json(msg="Getting user connecting to '{}'. - Experienced error {}.".format(link, e))
-#    except Exception as e:
-#      raise Exception("Get User Exception") #"Unexpected status getting user from '{}'. - Status {}.".format(link, resp.status)
-      #self.module.fail_json(msg="Getting user unknown error connecting to '{}'.".format(link))
+      self.module.fail_json(msg=to_native(e), function="Get Repo", exception=traceback.format_exc())
 
   def delete(self):
     self.logger.debug("delete")
@@ -140,7 +133,7 @@ class ArtifactoryUser(object):
         self.logger.info("Delete Looks successful to me")
         self.module.exit_json(changed=True, deleted=True)
       else:
-        self.module.fail_json(msg="Delete User request returned unexpected status. connecting to '{}'. - Status {}.".format(self.link, resp.status))
+        self.module.fail_json(msg="Delete request returned unexpected status. connecting to '{}'. - Status {}.".format(self.link, resp.status))
     except urllib_request.HTTPError as e:
       rawResponse = e.read()
       self.logger.error("Response: {}".format(rawResponse))
@@ -150,45 +143,16 @@ class ArtifactoryUser(object):
     self.logger.debug("update")
 
     payload = {
-      "name": self.user,
+      "key": self.key,
     }
 
     changed = False
 
-    password = self.module.params.get('password')
-    if password is not None and self.module.params.get('update_password') == 'always':
+    description = self.module.params.get('description')
+    if description is not None and self.currentrepo.get('description') != description:
       changed = True
-      self.logger.debug("Update Password")
-      payload['password'] = password
-    self.logger.debug(payload)
-    self.logger.debug(self.currentuser)
-
-    email = self.module.params.get('email')
-    if email is not None and self.currentuser.get('email') != email:
-      self.logger.debug("Setting email to {}".format(email))
-      payload['email'] = email
-
-    admin = self.module.params.get('admin')
-    if admin is not None and self.currentuser.get('admin') != admin:
-      changed = True
-      self.logger.debug("Setting Admin to {}".format(admin))
-      payload['admin'] = admin
-    self.logger.debug(payload)
-
-    profileUpdatable = self.module.params.get('profileUpdatable')
-    if profileUpdatable is not None and self.currentuser.get('profileUpdatable') != profileUpdatable:
-      self.logger.debug("Setting profileUpdatable to {}".format(profileUpdatable))
-      payload['profileUpdatable'] = profileUpdatable
-
-    disableUIAccess = self.module.params.get('disableUIAccess')
-    if disableUIAccess is not None and self.currentuser.get('disableUIAccess') != disableUIAccess:
-      self.logger.debug("Setting disableUIAccess to {}".format(disableUIAccess))
-      payload['disableUIAccess'] = disableUIAccess
-
-    internalPasswordDisabled = self.module.params.get('internalPasswordDisabled')
-    if internalPasswordDisabled is not None and self.currentuser.get('internalPasswordDisabled') != internalPasswordDisabled:
-      self.logger.debug("Setting internalPasswordDisabled to {}".format(internalPasswordDisabled))
-      payload['internalPasswordDisabled'] = internalPasswordDisabled
+      self.logger.debug("Setting description to {}".format(description))
+      payload['description'] = description
 
     if self.module.check_mode:
       self.logger.debug("Check Mode!")
@@ -226,32 +190,16 @@ class ArtifactoryUser(object):
     self.logger.debug("new")
 
     payload = {
-      "name": self.user,
-      "email": "{}@localhost".format(self.user),
-      "password": self.module.params['password']
+      "key":      self.key,
+      "rclass":    self.module.params['rclass'],
+      "packageType": self.module.params['packageType']
     }
 
-    admin = self.module.params.get('admin')
-    if admin is not None:
-      self.logger.debug("Setting Admin to {}".format(admin))
-      payload['admin'] = admin
-
-    profileUpdatable = self.module.params.get('profileUpdatable')
-    if profileUpdatable is not None:
-      self.logger.debug("Setting profileUpdatable to {}".format(profileUpdatable))
-      payload['profileUpdatable'] = profileUpdatable
-
-    disableUIAccess = self.module.params.get('disableUIAccess')
-    if disableUIAccess is not None:
-      self.logger.debug("Setting profileUpdatable to {}".format(disableUIAccess))
-      payload['disableUIAccess'] = disableUIAccess
-
-    internalPasswordDisabled = self.module.params.get('internalPasswordDisabled')
-    if internalPasswordDisabled is not None:
-      self.logger.debug("Setting profileUpdatable to {}".format(internalPasswordDisabled))
-      payload['internalPasswordDisabled'] = internalPasswordDisabled
-
-    h = {"Content-Type" : "application/json"}
+# ToDo: Add optional settings
+#    admin = self.module.params.get('admin')
+#    if admin is not None:
+#      self.logger.debug("Setting Admin to {}".format(admin))
+#      payload['admin'] = admin
 
     if self.module.check_mode:
       self.logger.debug("Check Mode!")
@@ -261,7 +209,7 @@ class ArtifactoryUser(object):
       resp = open_url(
         url= self.link,
         method='PUT',
-        headers = h,
+        headers = {"Content-Type" : "application/json"},
         force_basic_auth=True,
         url_username = self.api_username,
         url_password = self.api_password,
@@ -269,7 +217,7 @@ class ArtifactoryUser(object):
       )
 
       self.logger.debug("response status: {}".format(resp.status))
-      if resp.status == 201:  # Created
+      if resp.status == 200:  # Created
         self.module.exit_json(changed=True, created=True)
       else:
         self.module.fail_json(msg="New User: unexpected status. connecting to '{}'. - Status {}.".format(self.link, resp.status))
@@ -288,40 +236,40 @@ def main():
       api_username     = dict(type='str', required=False),
       api_password     = dict(type='str', required=False, no_log=True),
       state            = dict(default='present', choices=['present', 'absent']),
-      user             = dict(type='str',required=True),
-      password         = dict(require=False, no_log=True),
-      update_password  = dict(default='on_create', choices=['on_create', 'always'], no_log=False),
-      email            = dict(type='str', required=False),
-      admin            = dict(required=False, type='bool'),
-      profileUpdatable = dict(required=False, type='bool'),
-      disableUIAccess  = dict(required=False, type='bool'),
-      internalPasswordDisabled = dict(require=False, type='bool')
+      key              = dict(type='str', required=True),
+      rclass           = dict(require=True, choices=['local', 'remote', 'virtual']),
+      packageType      = dict(default='generic', require=False, choices=["alpine", "maven", "gradle", "ivy", "sbt", "helm", "cocoapods", "opkg", "rpm", "nuget", "cran", "gems", "npm", "bower", "debian", "composer", "pypi", "docker", "vagrant", "gitlfs", "go", "yum", "conan", "chef", "puppet", "generic"]),
+      description      = dict(type='str', required=False),
+      notes            = dict(type='str', required=False),
+      includesPattern  = dict(type='str', required=False),
+      excludesPattern  = dict(type='str', required=False),
+      calculateYumMetadata = dict(require=False, type='bool')
 #todo  groups(required=False, type='list')
     ),
     supports_check_mode=True
   )
 
   #run_module()
-  artifactory_user = ArtifactoryUser(module=module)
+  artifactory_repo = ArtifactoryRepo(module=module)
   if module.params.get('state') == 'present':
-    if artifactory_user.exists():
-      artifactory_user.update()
-      module.exit_json(msg='Updated existing user')
+    if artifactory_repo.exists():
+      artifactory_repo.update()
+      module.exit_json(msg='Update Repo')
     else:
-      artifactory_user.new()
-      module.exit_json(changed=True, msg='Created a new user')
+      artifactory_repo.new()
+      module.exit_json(changed=True, msg='Created a new repo')
 
   # Delete User
   if module.params.get('state') == 'absent':
-    if artifactory_user.exists():
+    if artifactory_repo.exists():
       #User does not already exist
-      artifactory_user.delete()
-      module.exit_json(changed=True, msg='Delete User')
+      artifactory_repo.delete()
+      module.exit_json(changed=True, msg='Delete Repo')
     else:
-      module.exit_json(changed=False, msg='User already doesnt exist')
+      module.exit_json(changed=False, msg='Repo does not exist')
 
 # Shouldn't get to here.
-  module.exit_json(changed=False, created=False, user=artifactory_user.currentuser)
+  module.exit_json(changed=False, created=False, user=artifactory_repo.currentuser)
 
 if __name__ == '__main__':
   main()
